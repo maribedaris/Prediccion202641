@@ -1,125 +1,107 @@
-
 import streamlit as st
 import pandas as pd
 import joblib
+import numpy as np
 
-# Configuración inicial
-st.set_page_config(page_title="Predictor Red Neuronal", layout="wide", page_icon="🧠")
-st.title("Aplicación de Predicción con Red Neuronal")
-st.markdown("Ingresa los datos en los formularios a continuación para obtener una predicción del modelo.")
+# Configuración inicial de la página
+st.set_page_config(page_title="Predictor de Modelo Neuronal", layout="centered")
 
-# ==========================================================
-# 1. Cargar modelo y preprocesadores (.pkl)
-# ==========================================================
-
+# 1. Cargar todos los artefactos de Machine Learning en caché para que la app sea rápida
 @st.cache_resource
-def load_models():
-    scaler = joblib.load('scaler.pkl')
-    le_binarios = joblib.load('label_encoders_binarios.pkl')
-    ohe_categoricas = joblib.load('one_hot_encoder_categoricas.pkl')
-    modelo_nn = joblib.load('modelo_red_neuronal_entrenado.pkl')
-    return scaler, le_binarios, ohe_categoricas, modelo_nn
-
-scaler, le_binarios, ohe_categoricas, modelo_nn = load_models()
-
-# Cargar los componentes
-scaler, le_binarios, ohe_categoricas, modelo_nn = load_models()
-
-# 2. Extraer automáticamente los nombres de las variables de los preprocesadores
-num_features = scaler.feature_names_in_
-bin_features = list(le_binarios.keys())
-cat_features = ohe_categoricas.feature_names_in_
-
-# 3. Crear la Interfaz Gráfica con el formulario
-with st.form("prediction_form"):
-    st.header("Datos de Entrada")
+def cargar_artefactos():
+    modelo = joblib.load('modelo_red_neuronal.joblib')
+    scaler = joblib.load('scaler.joblib')
+    ohe = joblib.load('one_hot_encoder.joblib')
+    label_encoders = joblib.load('label_encoders_binarios.joblib')
+    col_escalar = joblib.load('columnas_escalar.joblib')
+    col_cat = joblib.load('columnas_categoricas.joblib')
+    features_finales = joblib.load('feature_columns.joblib')
     
-    # Dividir la pantalla en 3 columnas para organizar mejor los campos
-    col1, col2, col3 = st.columns(3)
+    return modelo, scaler, ohe, label_encoders, col_escalar, col_cat, features_finales
+
+modelo, scaler, ohe, label_encoders, col_escalar, col_cat, features_finales = cargar_artefactos()
+
+st.title("Clasificador de Datos - Interfaz de Predicción")
+st.markdown("Ingresa los datos manualmente en los siguientes campos para generar una predicción.")
+
+# 2. Crear el formulario de entrada
+with st.form("formulario_prediccion"):
+    st.subheader("Datos Numéricos")
     input_data = {}
     
-    # Columna 1: Variables Numéricas (Cuadros de entrada numérica)
+    # Crear dos columnas para que el formulario se vea ordenado
+    col1, col2 = st.columns(2)
+    
+    # Campos Numéricos (cuadros editables)
     with col1:
-        st.subheader("Variables Numéricas")
-        for col in num_features:
-            # Puedes ajustar el paso (step) o los valores min/max si los conoces
-            input_data[col] = st.number_input(f"{col}", value=0.0)
+        for col in col_escalar:
+            # Se asume valor por defecto 0.0, puedes ajustarlo
+            input_data[col] = st.number_input(f"Ingrese: {col}", value=0.0, step=1.0)
             
-    # Columna 2: Variables Binarias (Menús desplegables)
-    with col2:
-        st.subheader("Variables Binarias")
-        for col in bin_features:
-            opciones_bin = le_binarios[col].classes_
-            input_data[col] = st.selectbox(f"{col}", opciones_bin)
+    # Campos Binarios (menús desplegables extraídos del LabelEncoder)
+    st.subheader("Datos Binarios")
+    col3, col4 = st.columns(2)
+    for i, (col, le) in enumerate(label_encoders.items()):
+        # Alternar entre columnas para la interfaz
+        column = col3 if i % 2 == 0 else col4
+        with column:
+            opciones = le.classes_
+            input_data[col] = st.selectbox(f"Seleccione: {col}", opciones)
             
-    # Columna 3: Variables Categóricas OHE (Menús desplegables múltiples)
-    with col3:
-        st.subheader("Variables Categóricas")
-        for i, col in enumerate(cat_features):
-            opciones_cat = ohe_categoricas.categories_[i]
-            input_data[col] = st.selectbox(f"{col}", opciones_cat)
-            
-    st.markdown("---")
-    # Botón de predicción
-    submit_button = st.form_submit_button("Realizar Predicción 🚀")
+    # Campos Categóricos (menús desplegables extraídos del OneHotEncoder)
+    st.subheader("Datos Categóricos")
+    col5, col6 = st.columns(2)
+    for i, col in enumerate(col_cat):
+        column = col5 if i % 2 == 0 else col6
+        with column:
+            opciones = ohe.categories_[i]
+            input_data[col] = st.selectbox(f"Seleccione: {col}", opciones)
 
-# 4. Lógica que se ejecuta al presionar el botón
+    # Botón de predicción
+    submit_button = st.form_submit_button(label="Generar Predicción")
+
+# 3. Lógica de procesamiento y predicción al presionar el botón
 if submit_button:
-    # Convertir el diccionario de entradas en un DataFrame de 1 fila
+    # Convertir el diccionario de entradas en un DataFrame de una sola fila
     df_input = pd.DataFrame([input_data])
     
     try:
-        # A. Preprocesar variables binarias
-        for col in bin_features:
-            df_input[col] = le_binarios[col].transform(df_input[col])
+        # A. Transformar columnas numéricas (Escalado)
+        df_input[col_escalar] = scaler.transform(df_input[col_escalar])
+        
+        # B. Transformar columnas binarias (Label Encoding)
+        for col, le in label_encoders.items():
+            df_input[col] = le.transform(df_input[col])
             
-        # B. Preprocesar variables categóricas (One-Hot Encoding)
-        cat_encoded = ohe_categoricas.transform(df_input[cat_features])
+        # C. Transformar columnas categóricas (One-Hot Encoding)
+        datos_categoricos_codificados = ohe.transform(df_input[col_cat])
         
-        # Verificar si la matriz es "sparse" (dispersa) y convertirla a un array denso si es necesario
-        if hasattr(cat_encoded, "toarray"):
-            cat_encoded = cat_encoded.toarray()
+        # El OneHotEncoder puede devolver una matriz rala o densa. La convertimos a array denso si es necesario.
+        if hasattr(datos_categoricos_codificados, "toarray"):
+            datos_categoricos_codificados = datos_categoricos_codificados.toarray()
             
-        # Crear un DataFrame con las características OHE
-        cat_encoded_df = pd.DataFrame(
-            cat_encoded, 
-            columns=ohe_categoricas.get_feature_names_out(cat_features)
-        )
+        nombres_columnas_ohe = ohe.get_feature_names_out(col_cat)
+        df_categorico = pd.DataFrame(datos_categoricos_codificados, columns=nombres_columnas_ohe)
         
-        # C. Preprocesar variables numéricas (Escalado)
-        df_input[num_features] = scaler.transform(df_input[num_features])
+        # D. Unir todos los datos preprocesados
+        df_procesado = df_input.drop(columns=col_cat)
+        df_final = pd.concat([df_procesado.reset_index(drop=True), df_categorico.reset_index(drop=True)], axis=1)
         
-        # D. Separar los dataframes procesados para concatenarlos correctamente
-        num_scaled_df = df_input[num_features].reset_index(drop=True)
-        bin_encoded_df = df_input[bin_features].reset_index(drop=True)
+        # E. Alinear las columnas con las que espera el modelo de red neuronal
+        # Garantiza el mismo orden exacto y rellena con 0 si por alguna razón falta alguna dummy variable
+        df_final = df_final.reindex(columns=features_finales, fill_value=0)
         
-        # E. Concatenar todo en el conjunto de variables final (X)
-        X_procesado = pd.concat([num_scaled_df, bin_encoded_df, cat_encoded_df], axis=1)
+        # Generar Predicción
+        prediccion = modelo.predict(df_final)[0]
         
-        # Asegurar que el orden de las columnas coincida exactamente con el que vio la Red Neuronal en el entrenamiento
-        if hasattr(modelo_nn, "feature_names_in_"):
-            # Rellenar con ceros las columnas que la red espera pero no se generaron (por categorías ausentes en el nuevo input)
-            columnas_faltantes = set(modelo_nn.feature_names_in_) - set(X_procesado.columns)
-            for c in columnas_faltantes:
-                X_procesado[c] = 0
-                
-            # Ordenar las columnas
-            X_procesado = X_procesado[modelo_nn.feature_names_in_]
+        # Generar las probabilidades si el modelo lo permite
+        if hasattr(modelo, "predict_proba"):
+            probabilidades = modelo.predict_proba(df_final)[0]
+            prob_max = np.max(probabilidades) * 100
+            st.success(f"### Predicción del Modelo: {prediccion}")
+            st.info(f"Confianza de la predicción: {prob_max:.2f}%")
+        else:
+            st.success(f"### Predicción del Modelo: {prediccion}")
             
-        # F. Realizar la predicción
-        prediccion = modelo_nn.predict(X_procesado)
-        probabilidad = modelo_nn.predict_proba(X_procesado)[0]
-        
-        # G. Mostrar los resultados en la interfaz
-        st.success("¡Análisis completado con éxito!")
-        
-        # Usamos métricas de Streamlit para destacar el resultado
-        st.metric(label="Resultado de Predicción", value=str(prediccion[0]))
-        
-        st.markdown("### Probabilidades por clase:")
-        # Mostrar las probabilidades formateadas
-        probs_dict = {f"Clase {modelo_nn.classes_[i]}": f"{prob*100:.2f}%" for i, prob in enumerate(probabilidad)}
-        st.json(probs_dict)
-        
     except Exception as e:
-        st.error(f"Se produjo un error al procesar los datos o hacer la predicción: {e}")
+        st.error(f"Ocurrió un error al procesar los datos: {e}")
